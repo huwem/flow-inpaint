@@ -4,7 +4,7 @@
 
 ## 🔧 特性
 
-- ✅ 基于 **条件流匹配（Conditional Flow Matching）**
+- ✅ 基于**条件流匹配（Conditional Flow Matching）**
 - ✅ 支持任意遮挡补全（矩形、随机）
 - ✅ 使用 U-Net 架构 + 时间嵌入
 - ✅ 连续归一化流生成，无需 GAN
