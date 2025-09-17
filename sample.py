@@ -1,8 +1,10 @@
+# sample.py
 import torch
 from models.conditional_unet import ConditionalUNet
 from PIL import Image
 from torchvision import transforms
 import numpy as np
+import random
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = ConditionalUNet().to(device)
@@ -17,8 +19,25 @@ transform = transforms.Compose([
 ])
 img = transform(img).unsqueeze(0).to(device)
 
-mask = torch.ones_like(img)
-mask[:, :, 20:50, 15:45] = 0
+# 创建反向遮罩：遮住大部分图片，只留下单块区域可见
+def create_inverse_mask_tensor(H, W, min_visible_ratio=0.1, max_visible_ratio=0.3):
+    mask = torch.zeros(1, H, W, device=device)
+    
+    # 计算可见区域大小
+    visible_ratio = random.uniform(min_visible_ratio, max_visible_ratio)
+    visible_h = int(H * visible_ratio)
+    visible_w = int(W * visible_ratio)
+    
+    # 随机确定可见区域位置
+    rh = random.randint(0, H - visible_h)
+    rw = random.randint(0, W - visible_w)
+    
+    # 设置可见区域
+    mask[0, rh:rh+visible_h, rw:rw+visible_w] = 1
+    return mask
+
+mask = create_inverse_mask_tensor(64, 64)
+mask = mask.unsqueeze(0).repeat(1, 3, 1, 1)  # 扩展到3个通道
 masked_img = img * mask
 
 x = torch.randn_like(img)
