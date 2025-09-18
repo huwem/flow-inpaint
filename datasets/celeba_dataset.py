@@ -6,12 +6,12 @@ import torchvision.transforms as T
 from utils.mask_utils import inverse_rectangle_mask  # 更改导入的函数
 
 class CelebADataset(Dataset):
-    def __init__(self, root, img_size=64):
+    def __init__(self, root, img_size=256):  # 修改默认 img_size 为 256
         self.root = root
         self.img_size = img_size
         self.filenames = [f for f in os.listdir(root) if f.endswith('.jpg')]
         self.transform = T.Compose([
-            T.Resize((img_size, img_size)),
+            T.Resize((img_size, img_size)),  # Resize 图像到 img_size × img_size
             T.ToTensor(),
             T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])

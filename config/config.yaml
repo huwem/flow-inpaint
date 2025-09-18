@@ -6,4 +6,4 @@ data_root: "data/celeba/img_align_celeba"
 model_save_path: "checkpoints/flow_inpaint.pth"
 results_dir: "results/"
 checkpoint_interval: 10
-device: "cuda" if torch.cuda.is_available() else "cpu"
+device: "cuda"

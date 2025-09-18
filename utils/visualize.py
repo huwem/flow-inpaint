@@ -1,10 +1,13 @@
+# utils/visualize.py
 import matplotlib.pyplot as plt
 import torch
+import numpy as np
 
 def save_inpainting_result(model, batch, device, filename, num_steps=50):
     model.eval()
     x_cond, x_true = batch
     x_cond = x_cond.to(device)
+    x_true = x_true.to(device)  # 确保 x_true 也在正确的设备上
     B, C, H, W = x_true.shape
 
     x = torch.randn_like(x_true).to(device)
@@ -15,10 +18,11 @@ def save_inpainting_result(model, batch, device, filename, num_steps=50):
             vt = model(x, t, x_cond)
             x = x - vt * dt
 
+    # 关键修复：确保所有张量在转换前都移到 CPU
     pred = x.cpu()
     x_cond_np = (x_cond.cpu() + 1) / 2
     pred_np = (pred + 1) / 2
-    true_np = (x_true + 1) / 2
+    true_np = (x_true.cpu() + 1) / 2  # 修复：添加 .cpu()
 
     fig, axes = plt.subplots(3, B, figsize=(B * 3, 9))
     if B == 1:
