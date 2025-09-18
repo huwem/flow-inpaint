@@ -16,10 +16,10 @@ def mini_batch_train():
     with open("config/config.yaml", 'r') as f:
         config = yaml.safe_load(f)
     
-    # 修改配置以进行小批量训练
-    config['num_epochs'] = 3  # 只训练3个epoch
-    config['batch_size'] = 4  # 小批量
-    config['img_size'] = 256  # 设置图像尺寸为 256
+    # 修改配置以进行小批量训练 - 设置能够看出效果的参数
+    config['num_epochs'] = 50  # 增加到20个epoch，足够看到明显效果
+    config['batch_size'] = 32   # 增加到8，提高训练稳定性
+    config['img_size'] = 256   # 保持256x256分辨率
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -42,7 +42,7 @@ def mini_batch_train():
         dataset, 
         batch_size=config['batch_size'], 
         shuffle=True, 
-        num_workers=2  # 减少worker数量
+        num_workers=4  # 减少worker数量
     )
     
     # 初始化模型并确保在正确设备上
@@ -51,7 +51,7 @@ def mini_batch_train():
     model = model.to(device)  # 确保模型在正确设备上
     print(f"Model device: {next(model.parameters()).device}")
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config['learning_rate'] * 0.1)  # 降低学习率
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config['learning_rate'] * 0.5)  # 适度降低学习率
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['num_epochs'])
     
     print(f"🚀 开始小批量训练测试 ({config['num_epochs']} epochs)...")
@@ -62,9 +62,9 @@ def mini_batch_train():
         total_loss = 0.0
         num_batches = 0
         
-        # 只处理前几个batch以加快测试
+        # 处理更多batch以获得更稳定的训练效果
         for i, (masked, _, clean) in enumerate(dataloader):
-            if i >= 5:  # 只处理前5个batch
+            if i >= 10:  # 处理前10个batch，平衡训练效果和时间
                 break
                 
             # 确保所有张量都在相同设备上
@@ -102,7 +102,8 @@ def mini_batch_train():
             total_loss += loss.item()
             num_batches += 1
             
-            print(f"  Batch {i+1}, Loss: {loss.item():.4f}")
+            # 每个batch都打印信息，便于观察训练过程
+            print(f"  Epoch {epoch+1}, Batch {i+1}, Loss: {loss.item():.4f}")
         
         if num_batches > 0:
             avg_loss = total_loss / num_batches
@@ -110,17 +111,18 @@ def mini_batch_train():
             
             print(f"Epoch [{epoch+1}/{config['num_epochs']}], Average Loss: {avg_loss:.4f}")
             
-            # 每个epoch后保存一次结果
-            with torch.no_grad():
-                try:
-                    save_inpainting_result(
-                        model,
-                        (masked[:4].to(device), clean[:4].to(device)),  # 确保在正确设备上
-                        device,
-                        f"{config['results_dir']}/mini_batch_epoch_{epoch+1}.png"
-                    )
-                except Exception as e:
-                    print(f"Failed to save visualization: {e}")
+            # 每隔几个epoch保存一次结果，便于观察效果演变
+            if (epoch + 1) % 5 == 0:  # 每5个epoch保存一次
+                with torch.no_grad():
+                    try:
+                        save_inpainting_result(
+                            model,
+                            (masked[:4].to(device), clean[:4].to(device)),  # 确保在正确设备上
+                            device,
+                            f"{config['results_dir']}/mini_batch_epoch_{epoch+1}.png"
+                        )
+                    except Exception as e:
+                        print(f"Failed to save visualization: {e}")
         else:
             print(f"Epoch [{epoch+1}/{config['num_epochs']}], No valid batches processed")
     
