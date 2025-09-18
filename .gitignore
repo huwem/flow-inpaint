@@ -4,5 +4,5 @@ data/
 # 忽略目录下的所有文件，但不包括目录本身
 data/*
 
-# 忽略result目录
-result/
+# 忽略results目录
+results/
