@@ -6,3 +6,6 @@ data/*
 
 # 忽略results目录
 results/
+
+# 忽略runs目录
+runs/
