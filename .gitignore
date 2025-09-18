@@ -9,3 +9,6 @@ results/
 
 # 忽略runs目录
 runs/
+
+#忽略checkpoints目录
+checkpoints/
