@@ -1,7 +1,5 @@
-# utils/visualize.py
-import matplotlib.pyplot as plt
 import torch
-import numpy as np
+import matplotlib.pyplot as plt
 
 def save_inpainting_result(model, batch, device, filename, num_steps=50):
     model.eval()
@@ -10,13 +8,17 @@ def save_inpainting_result(model, batch, device, filename, num_steps=50):
     x_true = x_true.to(device)  # 确保 x_true 也在正确的设备上
     B, C, H, W = x_true.shape
 
+    # 初始化为标准正态分布噪声
     x = torch.randn_like(x_true).to(device)
+    
     with torch.no_grad():
         for i in range(num_steps, 0, -1):
+            # 时间从1到0，步长为1/num_steps
             t = torch.full((B,), i / num_steps, device=device)
             dt = 1.0 / num_steps
             vt = model(x, t, x_cond)
-            x = x - vt * dt
+            # 正确的更新公式，从噪声向数据移动
+            x = x + vt * dt  # 欧拉法求解ODE
 
     # 关键修复：确保所有张量在转换前都移到 CPU
     pred = x.cpu()

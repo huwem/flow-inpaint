@@ -1,60 +1,74 @@
 # utils/flow_utils.py
 import torch
+import torch.nn.functional as F
 
 def get_linear_noise_schedule(t):
     return 1 - t, t
 
 def compute_flow_vector(x0, x1, t):
-    # 确保 t 的形状与 x0, x1 匹配
-    if t.dim() == 1:
-        # 将 t 从 [B] 扩展为 [B, 1, 1, 1] 以匹配图像张量的维度
-        t = t.view(-1, 1, 1, 1)
-    
-    # 扩展 t 到与 x0, x1 相同的形状
-    t = t.expand_as(x0)
-    
-    s0, s1 = get_linear_noise_schedule(t)
-    xt = s0 * x0 + s1 * x1
-    vt = x1 - x0
-    return xt, vt
-
-def flow_matching_loss(model, x0, x_cond, t=None):
     """
-    计算流匹配损失函数
+    计算从x0到x1的线性流场向量
+    Args:
+        x0: 起始点 (例如噪声图像) [B, C, H, W]
+        x1: 终止点 (例如真实图像) [B, C, H, W]
+        t: 时间步 [B, 1] 或标量
+    Returns:
+        vt: 在时间t处的速度向量 [B, C, H, W]
+    """
+    # 确保t的形状正确
+    if isinstance(t, torch.Tensor) and t.dim() == 0:
+        t = t.unsqueeze(0)  # 添加batch维度
     
+    # 线性插值的流向量就是从x0到x1的方向向量
+    # 对于线性路径: path(t) = (1-t) * x0 + t * x1
+    # 速度向量: v(t) = d/dt path(t) = x1 - x0
+    vt = x1 - x0
+    return vt
+
+def flow_matching_loss(model, clean_img, masked_img, mask=None, num_time_samples=1):
+    """
+    计算流匹配损失
     Args:
         model: 条件UNet模型
-        x0: 目标图像 (干净图像)
-        x_cond: 条件图像 (掩码图像)
-        t: 时间步，如果为None则随机生成
-    
+        clean_img: 真实图像 [B, C, H, W]
+        masked_img: 带掩码的图像 [B, C, H, W]
+        mask: 掩码 (可选)
+        num_time_samples: 每个样本的时间点采样数
     Returns:
-        loss: 流匹配损失值
+        loss: 流匹配损失
     """
-    # 确保所有输入张量在相同设备上
-    device = x0.device
-    x_cond = x_cond.to(device)
+    B, C, H, W = clean_img.shape
+    device = clean_img.device
     
-    # 获取批次大小
-    batch_size = x0.size(0)
+    losses = []
     
-    # 如果没有提供时间步，则随机生成[0,1)范围内的时间步
-    if t is None:
-        t = torch.rand(batch_size, device=device)
-    else:
-        t = t.to(device)
+    for _ in range(num_time_samples):
+        # 随机采样时间点 t ~ Uniform(0, 1)
+        t = torch.rand(B, device=device)
+        
+        # 生成噪声样本 x0 ~ N(0, I)
+        x0 = torch.randn_like(clean_img)
+        
+        # 使用线性插值计算 xt
+        # xt = (1 - t) * x0 + t * x1
+        t_expand = t.view(B, 1, 1, 1)
+        xt = (1 - t_expand) * x0 + t_expand * clean_img
+        
+        # 计算真实流场向量 vt = x1 - x0
+        vt_true = compute_flow_vector(x0, clean_img, t)
+        
+        # 模型预测流场向量
+        vt_pred = model(xt, t, masked_img)
+        
+        # 计算均方误差损失
+        # 只在掩码区域计算损失（如果提供了掩码）
+        if mask is not None:
+            # 扩展mask以匹配图像维度
+            mask_expand = mask.view(B, 1, H, W).expand_as(vt_true)
+            loss = F.mse_loss(vt_pred[mask_expand], vt_true[mask_expand])
+        else:
+            loss = F.mse_loss(vt_pred, vt_true)
+            
+        losses.append(loss)
     
-    # 生成随机噪声图像x1
-    x1 = torch.randn_like(x0, device=device)
-    
-    # 计算在时间t时的图像状态xt和对应的流场向量vt
-    xt, vt = compute_flow_vector(x0, x1, t)
-    
-    # 模型预测流场向量
-    # 参数顺序：噪声图像xt，时间步t，条件图像x_cond
-    pred_vt = model(xt, t, x_cond)
-    
-    # 计算均方误差损失
-    loss = torch.mean((pred_vt - vt) ** 2)
-    
-    return loss
+    return torch.stack(losses).mean()

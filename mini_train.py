@@ -17,7 +17,7 @@ def main():
         config = yaml.safe_load(f)
     
     # 修改配置：设置epoch数为100
-    config['num_epochs'] = 100
+    config['num_epochs'] = 200
 
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,7 +38,7 @@ def main():
     try:
         full_dataset = CelebADataset(config['data_root'], img_size=config['img_size'])
         # 只使用前2000张图片
-        dataset = Subset(full_dataset, range(min(2000, len(full_dataset))))
+        dataset = Subset(full_dataset, range(min(200, len(full_dataset))))
         print(f"Dataset loaded with {len(dataset)} samples (limited to first 2000)")
     except Exception as e:
         print(f"Failed to load dataset: {e}")
