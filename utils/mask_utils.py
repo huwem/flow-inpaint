@@ -10,7 +10,7 @@ def random_rectangle_mask(H=64, W=64, max_size=0.4):
     mask[0, rh:rh+h, rw:rw+w] = 0
     return mask
 
-def inverse_rectangle_mask(H=64, W=64, min_visible_ratio=0.1, max_visible_ratio=0.3):
+def inverse_rectangle_mask(H=64, W=64, min_visible_ratio=0.5, max_visible_ratio=0.8):
     """
     创建反向遮罩：遮住大部分图片，只留下单块区域可见
     

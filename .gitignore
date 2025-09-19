@@ -1,3 +1,11 @@
 #忽略data文件夹下的所有文件
 data/**
 
+#忽略checkpoints文件夹下的所有文件
+checkpoint/**
+
+#忽略logs文件夹下的所有文件
+logs/** 
+
+
+

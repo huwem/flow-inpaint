@@ -1,71 +1,227 @@
-# mini_train.py
+# train.py
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from models.conditional_unet import ConditionalUNet
 from datasets.celeba_dataset import CelebADataset
 from utils.flow_utils import flow_matching_loss
-import os
+from utils.visualize import save_inpainting_result
 import yaml
+import os
+import matplotlib.pyplot as plt
+import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
-def mini_train():
-    # 从配置文件加载设置
+def main():
+    # 加载配置
     with open("config/config.yaml", 'r') as f:
         config = yaml.safe_load(f)
     
+    # 修改配置：设置epoch数为100
+    config['num_epochs'] = 100
+
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
     
     # 创建必要的目录
     os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs(config['results_dir'], exist_ok=True)
     
-    # 创建小型数据集（仅使用少量数据进行测试训练）
-    dataset = CelebADataset(config['data_root'], img_size=config['img_size'])
+    # 创建TensorBoard日志目录
+    writer = SummaryWriter(log_dir='runs/flow_inpaint_training')
     
-    # 使用较小的batch size和较少的数据
-    batch_size = min(16, config['batch_size'])  # 最多使用8个样本
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    # 记录配置信息
+    writer.add_text('Config', str(config))
+
+    # 创建数据集和数据加载器（只使用前2000张图片）
+    print("Loading dataset...")
+    try:
+        full_dataset = CelebADataset(config['data_root'], img_size=config['img_size'])
+        # 只使用前2000张图片
+        dataset = Subset(full_dataset, range(min(2000, len(full_dataset))))
+        print(f"Dataset loaded with {len(dataset)} samples (limited to first 2000)")
+    except Exception as e:
+        print(f"Failed to load dataset: {e}")
+        return
     
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=config['batch_size'], 
+        shuffle=True, 
+        num_workers=4,
+        pin_memory=True  # 加速数据传输到GPU
+    )
+
     # 初始化模型
-    model = ConditionalUNet().to(device)
+    print("Initializing model...")
+    model = ConditionalUNet(in_channels=3, width=config.get('model_width', 64))
+    model = model.to(device)
+    print(f"Model device: {next(model.parameters()).device}")
     
-    # 设置优化器
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config['learning_rate'] * 0.1)  # 使用更小的学习率
+    # 设置优化器和学习率调度器
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=config['learning_rate'],
+        weight_decay=config.get('weight_decay', 1e-4)
+    )
     
-    print("🚀 开始简化训练...")
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=config['num_epochs']
+    )
+
+    print(f"🚀 开始训练 ({config['num_epochs']} epochs)...")
     
-    # 只训练很少的epoch用于测试
-    num_epochs = 50
+    # 用于记录训练损失
+    train_losses = []
     
-    for epoch in range(num_epochs):
+    # 固定一批验证样本用于可视化
+    val_sample = None
+
+    # 训练循环
+    for epoch in range(config['num_epochs']):
         model.train()
         total_loss = 0.0
         num_batches = 0
         
-        # 只处理前几个batch以加快训练
+        # 遍历所有batch
         for i, (masked, _, clean) in enumerate(dataloader):
-            if i >= 10:  # 只处理前3个batch
-                break
+            # 确保所有张量都在相同设备上
+            masked, clean = masked.to(device, non_blocking=True), clean.to(device, non_blocking=True)
+            
+            # 在第一个epoch保存验证样本
+            if epoch == 0 and val_sample is None:
+                val_sample = (masked[:4].clone(), clean[:4].clone())
+            
+            # 检查输入是否有效
+            if torch.isnan(masked).any() or torch.isnan(clean).any():
+                print(f"NaN values detected in batch {i}, skipping...")
+                continue
                 
-            masked, clean = masked.to(device), clean.to(device)
+            try:
+                # 计算流匹配损失
+                loss = flow_matching_loss(model, clean, masked)
+                
+                # 检查损失是否有效
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"Invalid loss value in batch {i}, skipping...")
+                    continue
+                    
+                # 反向传播
+                optimizer.zero_grad()
+                loss.backward()
+                
+                # 梯度裁剪
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                
+                total_loss += loss.item()
+                num_batches += 1
+                
+                # 记录每个batch的损失
+                writer.add_scalar('Batch/Loss', loss.item(), epoch * len(dataloader) + i)
+                
+                # 打印进度
+                if (i + 1) % 10 == 0:
+                    print(f"  Epoch [{epoch+1}/{config['num_epochs']}], Batch [{i+1}/{len(dataloader)}], Loss: {loss.item():.4f}")
+                    
+            except RuntimeError as e:
+                print(f"Error in batch {i}: {e}")
+                print("Skipping this batch...")
+                continue
+
+        # 计算平均损失
+        if num_batches > 0:
+            avg_loss = total_loss / num_batches
+            train_losses.append(avg_loss)
             
-            # 计算损失
-            loss = flow_matching_loss(model, clean, masked)
+            # 记录学习率
+            current_lr = optimizer.param_groups[0]['lr']
             
-            # 反向传播
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            # 写入TensorBoard
+            writer.add_scalar('Epoch/Loss', avg_loss, epoch)
+            writer.add_scalar('Epoch/Learning_Rate', current_lr, epoch)
             
-            total_loss += loss.item()
-            num_batches += 1
+            scheduler.step()
+            print(f"Epoch [{epoch+1}/{config['num_epochs']}], Average Loss: {avg_loss:.4f}, LR: {current_lr:.6f}")
+        else:
+            print(f"Epoch [{epoch+1}/{config['num_epochs']}], No valid batches processed")
+            continue
+
+        # 定期保存检查点和可视化结果（每10个epoch保存一次）
+        if (epoch + 1) % 10 == 0:
+            # 保存模型检查点
+            checkpoint_path = f"checkpoints/model_epoch_{epoch+1}.pth"
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_loss,
+            }, checkpoint_path)
+            print(f"Checkpoint saved to {checkpoint_path}")
+            
+            # 生成可视化结果
+            with torch.no_grad():
+                try:
+                    # 保存当前batch的可视化结果
+                    save_inpainting_result(
+                        model,
+                        (masked[:4], clean[:4]),
+                        device,
+                        f"{config['results_dir']}/epoch_{epoch+1}.png"
+                    )
+                    
+                    # 保存固定样本的可视化结果，便于比较训练过程
+                    if val_sample is not None:
+                        val_masked, val_clean = val_sample
+                        val_masked, val_clean = val_masked.to(device), val_clean.to(device)
+                        save_inpainting_result(
+                            model,
+                            (val_masked, val_clean),
+                            device,
+                            f"{config['results_dir']}/fixed_sample_epoch_{epoch+1}.png"
+                        )
+                    
+                    # 将图像结果添加到TensorBoard
+                    if os.path.exists(f"{config['results_dir']}/epoch_{epoch+1}.png"):
+                        result_image = plt.imread(f"{config['results_dir']}/epoch_{epoch+1}.png")
+                        writer.add_image('Training Results', 
+                                       np.transpose(result_image, (2, 0, 1)), 
+                                       epoch, 
+                                       dataformats='CHW')
+                                       
+                except Exception as e:
+                    print(f"Failed to save visualization: {e}")
+
+    # 保存最终模型
+    try:
+        final_model_path = config.get('model_save_path', "checkpoints/final_model.pth")
+        torch.save(model.state_dict(), final_model_path)
+        print(f"✅ 训练完成，最终模型已保存至 {final_model_path}")
+    except Exception as e:
+        print(f"Failed to save final model: {e}")
+
+    # 绘制损失曲线并保存
+    if train_losses:
+        plt.figure(figsize=(10, 5))
+        plt.plot(train_losses)
+        plt.title('Training Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.grid(True)
+        plt.savefig('training_loss.png')
+        plt.close()
         
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0
-        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}")
+        # 将最终损失曲线添加到TensorBoard
+        if os.path.exists('training_loss.png'):
+            loss_image = plt.imread('training_loss.png')
+            writer.add_image('Final Loss Curve', 
+                           np.transpose(loss_image, (2, 0, 1)), 
+                           0, 
+                           dataformats='CHW')
     
-    # 保存模型
-    torch.save(model.state_dict(), "checkpoints/mini_flow_inpaint.pth")
-    print("✅ 简化训练完成，模型已保存到 checkpoints/mini_flow_inpaint.pth")
+    writer.close()
+    print("Training completed and TensorBoard logs saved.")
 
 if __name__ == "__main__":
-    mini_train()
+    main()
